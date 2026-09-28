@@ -1,60 +1,17 @@
 import { useEffect, useState } from "react";
+import "./App.css";
 
 const API = "http://localhost:5000";
 
 function App() {
   const [products, setProducts] = useState([]);
-  const [suggestions, setSuggestions] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState("");
+  const [suggestions, setSuggestions] = useState({});
+  const [loading, setLoading] = useState(false);
 
   const loadProducts = async () => {
-    try {
-      const response = await fetch(`${API}/products`);
-      const data = await response.json();
-      setProducts(data);
-
-      // Create pending suggestions for products currently below threshold
-      const lowStockSuggestions = [];
-
-      data.forEach((product) => {
-        if (product.stock < product.reorderThreshold) {
-          lowStockSuggestions.push({
-            id: `price-${product.id}`,
-            productId: product.id,
-            type: "PRICING",
-            triggerReason: "INVENTORY_LOW",
-            recommendedPrice: Math.round(product.currentPrice * 1.1),
-            recommendedQuantity:
-              product.reorderThreshold * 3 - product.stock,
-            confidence: 0.9,
-            reasoning:
-              "Stock is below the reorder threshold, so price is increased by 10%.",
-            status: "PENDING",
-          });
-
-          lowStockSuggestions.push({
-            id: `reorder-${product.id}`,
-            productId: product.id,
-            type: "REORDER",
-            triggerReason: "INVENTORY_LOW",
-            recommendedPrice: Math.round(product.currentPrice * 1.1),
-            recommendedQuantity:
-              product.reorderThreshold * 3 - product.stock,
-            confidence: 0.9,
-            reasoning:
-              "Stock is below the reorder threshold, so additional inventory is recommended.",
-            status: "PENDING",
-          });
-        }
-      });
-
-      setSuggestions(lowStockSuggestions);
-    } catch (error) {
-      setMessage("Cannot connect to backend.");
-    } finally {
-      setLoading(false);
-    }
+    const response = await fetch(`${API}/products`);
+    const data = await response.json();
+    setProducts(data);
   };
 
   useEffect(() => {
@@ -62,216 +19,169 @@ function App() {
   }, []);
 
   const simulateSale = async (productId) => {
+    setLoading(true);
+
     try {
       const response = await fetch(
         `${API}/products/${productId}/orders`,
         {
           method: "POST",
           headers: {
-            "Content-Type": "application/json",
+            "Content-Type": "application/json"
           },
-          body: JSON.stringify({ quantity: 1 }),
+          body: JSON.stringify({
+            quantity: 1
+          })
         }
       );
 
       const data = await response.json();
 
       if (!response.ok) {
-        setMessage(data.message);
+        alert(data.message);
         return;
       }
 
-      setMessage(`Sale simulated for ${data.product.name}`);
-
-      await loadProducts();
-    } catch (error) {
-      setMessage("Failed to simulate sale.");
-    }
-  };
-
-  const acceptPricing = async (suggestion) => {
-    try {
-      const response = await fetch(
-        `${API}/pricing-suggestions/${suggestion.productId}`,
-        {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            action: "ACCEPT",
-            recommendedPrice: suggestion.recommendedPrice,
-          }),
+      setSuggestions((prev) => ({
+        ...prev,
+        [productId]: {
+          pricing: data.pricingSuggestion,
+          reorder: data.reorderSuggestion
         }
-      );
+      }));
 
-      if (!response.ok) {
-        setMessage("Failed to accept pricing suggestion.");
-        return;
-      }
-
-      setSuggestions((current) =>
-        current.map((item) =>
-          item.id === suggestion.id
-            ? { ...item, status: "ACCEPTED" }
-            : item
-        )
-      );
-
-      setProducts((current) =>
-        current.map((product) =>
-          product.id === suggestion.productId
-            ? {
-                ...product,
-                currentPrice: suggestion.recommendedPrice,
-              }
-            : product
-        )
-      );
-
-      setMessage("Pricing suggestion accepted.");
+      loadProducts();
     } catch (error) {
-      setMessage("Failed to accept pricing suggestion.");
+      alert("Could not connect to backend");
+    } finally {
+      setLoading(false);
     }
   };
 
-  const rejectPricing = async (suggestion) => {
-    try {
-      const response = await fetch(
-        `${API}/pricing-suggestions/${suggestion.productId}`,
-        {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            action: "REJECT",
-          }),
+  const acceptPricing = async (productId, price) => {
+    const response = await fetch(
+      `${API}/pricing-suggestions/${productId}`,
+      {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          action: "ACCEPT",
+          recommendedPrice: price
+        })
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      alert(data.message);
+      return;
+    }
+
+    setSuggestions((prev) => ({
+      ...prev,
+      [productId]: {
+        ...prev[productId],
+        pricing: {
+          ...prev[productId].pricing,
+          status: "ACCEPTED"
         }
-      );
-
-      if (!response.ok) {
-        setMessage("Failed to reject pricing suggestion.");
-        return;
       }
+    }));
 
-      setSuggestions((current) =>
-        current.map((item) =>
-          item.id === suggestion.id
-            ? { ...item, status: "REJECTED" }
-            : item
-        )
-      );
-
-      setMessage("Pricing suggestion rejected.");
-    } catch (error) {
-      setMessage("Failed to reject pricing suggestion.");
-    }
+    loadProducts();
   };
 
-  const acceptReorder = async (suggestion) => {
-    try {
-      const response = await fetch(
-        `${API}/reorder-suggestions/${suggestion.productId}`,
-        {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            action: "ACCEPT",
-            recommendedQuantity: suggestion.recommendedQuantity,
-          }),
+  const rejectPricing = (productId) => {
+    setSuggestions((prev) => ({
+      ...prev,
+      [productId]: {
+        ...prev[productId],
+        pricing: {
+          ...prev[productId].pricing,
+          status: "REJECTED"
         }
-      );
-
-      if (!response.ok) {
-        setMessage("Failed to accept reorder suggestion.");
-        return;
       }
-
-      setSuggestions((current) =>
-        current.map((item) =>
-          item.id === suggestion.id
-            ? { ...item, status: "ACCEPTED" }
-            : item
-        )
-      );
-
-      await loadProducts();
-
-      setMessage("Reorder suggestion accepted.");
-    } catch (error) {
-      setMessage("Failed to accept reorder suggestion.");
-    }
+    }));
   };
 
-  const rejectReorder = async (suggestion) => {
-    try {
-      const response = await fetch(
-        `${API}/reorder-suggestions/${suggestion.productId}`,
-        {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            action: "REJECT",
-          }),
+  const acceptReorder = async (productId, quantity) => {
+    const response = await fetch(
+      `${API}/reorder-suggestions/${productId}`,
+      {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          action: "ACCEPT",
+          recommendedQuantity: quantity
+        })
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      alert(data.message);
+      return;
+    }
+
+    setSuggestions((prev) => ({
+      ...prev,
+      [productId]: {
+        ...prev[productId],
+        reorder: {
+          ...prev[productId].reorder,
+          status: "ACCEPTED"
         }
-      );
-
-      if (!response.ok) {
-        setMessage("Failed to reject reorder suggestion.");
-        return;
       }
+    }));
 
-      setSuggestions((current) =>
-        current.map((item) =>
-          item.id === suggestion.id
-            ? { ...item, status: "REJECTED" }
-            : item
-        )
-      );
-
-      setMessage("Reorder suggestion rejected.");
-    } catch (error) {
-      setMessage("Failed to reject reorder suggestion.");
-    }
+    loadProducts();
   };
 
-  const pendingSuggestions = suggestions.filter(
-    (item) => item.status === "PENDING"
-  );
+  const rejectReorder = (productId) => {
+    setSuggestions((prev) => ({
+      ...prev,
+      [productId]: {
+        ...prev[productId],
+        reorder: {
+          ...prev[productId].reorder,
+          status: "REJECTED"
+        }
+      }
+    }));
+  };
 
   return (
     <div className="app">
+
       <header className="header">
         <div>
           <h1>StockPulse</h1>
-          <p>AI Inventory & Dynamic Pricing Engine</p>
+          <p>Inventory & Pricing Console</p>
         </div>
 
-        <button className="refresh" onClick={loadProducts}>
+        <button
+          className="refresh-btn"
+          onClick={loadProducts}
+        >
           Refresh
         </button>
       </header>
 
-      {message && <div className="message">{message}</div>}
-
       <main>
-        <section className="stats">
-          <div className="stat-card">
+
+        <div className="summary">
+          <div className="summary-card">
             <span>Products</span>
             <strong>{products.length}</strong>
           </div>
 
-          <div className="stat-card">
-            <span>Pending Suggestions</span>
-            <strong>{pendingSuggestions.length}</strong>
-          </div>
-
-          <div className="stat-card">
+          <div className="summary-card">
             <span>Low Stock</span>
             <strong>
               {
@@ -281,208 +191,259 @@ function App() {
               }
             </strong>
           </div>
-        </section>
 
-        <section className="section">
+          <div className="summary-card">
+            <span>Pending Suggestions</span>
+            <strong>
+              {
+                Object.values(suggestions).filter(
+                  (s) =>
+                    s.pricing?.status === "PENDING" ||
+                    s.reorder?.status === "PENDING"
+                ).length
+              }
+            </strong>
+          </div>
+        </div>
+
+        <section>
           <div className="section-title">
-            <div>
-              <h2>Products</h2>
-              <p>Monitor inventory, pricing and demand</p>
-            </div>
+            <h2>Products</h2>
+            <p>Monitor inventory and merchandising signals</p>
           </div>
 
-          {loading ? (
-            <p>Loading products...</p>
-          ) : (
-            <div className="product-grid">
-              {products.map((product) => {
-                const lowStock =
-                  product.stock < product.reorderThreshold;
+          <div className="product-grid">
 
-                return (
-                  <div className="product-card" key={product.id}>
-                    <div className="product-top">
-                      <div>
-                        <span className="sku">{product.sku}</span>
-                        <h3>{product.name}</h3>
-                      </div>
+            {products.map((product) => {
 
-                      <span
-                        className={
-                          lowStock
-                            ? "badge danger"
-                            : "badge success"
-                        }
-                      >
-                        {lowStock ? "LOW STOCK" : "ACTIVE"}
+              const lowStock =
+                product.stock < product.reorderThreshold;
+
+              const suggestion =
+                suggestions[product.id];
+
+              return (
+                <div
+                  className="product-card"
+                  key={product.id}
+                >
+
+                  <div className="product-top">
+
+                    <div>
+                      <span className="sku">
+                        {product.sku}
+                      </span>
+
+                      <h3>{product.name}</h3>
+
+                      <span className="category">
+                        {product.category}
                       </span>
                     </div>
 
-                    <div className="product-info">
-                      <div>
-                        <span>Category</span>
-                        <strong>{product.category}</strong>
-                      </div>
-
-                      <div>
-                        <span>Price</span>
-                        <strong>₹{product.currentPrice}</strong>
-                      </div>
-
-                      <div>
-                        <span>Stock</span>
-                        <strong>
-                          {product.stock} / {product.reorderThreshold}
-                        </strong>
-                      </div>
-
-                      <div>
-                        <span>Demand / 24h</span>
-                        <strong>{product.demandVelocity}</strong>
-                      </div>
-                    </div>
-
-                    <button
-                      className="sale-button"
-                      onClick={() => simulateSale(product.id)}
-                      disabled={product.stock === 0}
+                    <span
+                      className={
+                        lowStock
+                          ? "status low"
+                          : "status active"
+                      }
                     >
-                      Simulate Sale
-                    </button>
+                      {lowStock
+                        ? "LOW STOCK"
+                        : "ACTIVE"}
+                    </span>
+
                   </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
 
-        <section className="section">
-          <div className="section-title">
-            <div>
-              <h2>Merchandising Suggestions</h2>
-              <p>Review recommendations before applying changes</p>
-            </div>
-          </div>
+                  <div className="details">
 
-          {pendingSuggestions.length === 0 ? (
-            <div className="empty">
-              No pending suggestions
-            </div>
-          ) : (
-            <div className="suggestion-list">
-              {pendingSuggestions.map((suggestion) => {
-                const product = products.find(
-                  (p) => p.id === suggestion.productId
-                );
+                    <div>
+                      <span>Price</span>
+                      <strong>
+                        ₹{product.currentPrice}
+                      </strong>
+                    </div>
 
-                if (!product) return null;
+                    <div>
+                      <span>Stock</span>
+                      <strong>
+                        {product.stock}
+                      </strong>
+                    </div>
 
-                return (
-                  <div
-                    className="suggestion-card"
-                    key={suggestion.id}
+                    <div>
+                      <span>Threshold</span>
+                      <strong>
+                        {product.reorderThreshold}
+                      </strong>
+                    </div>
+
+                    <div>
+                      <span>Demand / 24h</span>
+                      <strong>
+                        {product.demandVelocity}
+                      </strong>
+                    </div>
+
+                  </div>
+
+                  <button
+                    className="sale-btn"
+                    onClick={() =>
+                      simulateSale(product.id)
+                    }
+                    disabled={loading || product.stock === 0}
                   >
-                    <div className="suggestion-header">
-                      <div>
-                        <span className="sku">
-                          {product.sku}
-                        </span>
+                    Simulate Sale
+                  </button>
 
-                        <h3>
-                          {product.name} —{" "}
-                          {suggestion.type === "PRICING"
-                            ? "Pricing Recommendation"
-                            : "Reorder Recommendation"}
-                        </h3>
+                  {suggestion?.pricing && (
+                    <div className="suggestion">
+
+                      <div className="suggestion-header">
+                        <strong>
+                          Pricing Suggestion
+                        </strong>
+
+                        <span className="badge">
+                          {suggestion.pricing.triggerReason}
+                        </span>
                       </div>
 
-                      <span className="badge warning">
-                        {suggestion.triggerReason}
+                      <p>
+                        ₹{suggestion.pricing.currentPrice}
+                        {" → "}
+                        <strong>
+                          ₹{suggestion.pricing.recommendedPrice}
+                        </strong>
+                      </p>
+
+                      <p className="reason">
+                        {suggestion.pricing.reasoning}
+                      </p>
+
+                      <span className="confidence">
+                        Confidence:{" "}
+                        {Math.round(
+                          suggestion.pricing.confidence * 100
+                        )}
+                        %
                       </span>
-                    </div>
 
-                    <div className="recommendation">
-                      {suggestion.type === "PRICING" ? (
-                        <>
-                          <div>
-                            <span>Current Price</span>
-                            <strong>
-                              ₹{product.currentPrice}
-                            </strong>
-                          </div>
+                      {suggestion.pricing.status ===
+                      "PENDING" ? (
+                        <div className="actions">
 
-                          <div>
-                            <span>Recommended Price</span>
-                            <strong>
-                              ₹{suggestion.recommendedPrice}
-                            </strong>
-                          </div>
-                        </>
+                          <button
+                            className="accept"
+                            onClick={() =>
+                              acceptPricing(
+                                product.id,
+                                suggestion.pricing
+                                  .recommendedPrice
+                              )
+                            }
+                          >
+                            Accept
+                          </button>
+
+                          <button
+                            className="reject"
+                            onClick={() =>
+                              rejectPricing(product.id)
+                            }
+                          >
+                            Reject
+                          </button>
+
+                        </div>
                       ) : (
-                        <>
-                          <div>
-                            <span>Current Stock</span>
-                            <strong>{product.stock}</strong>
-                          </div>
-
-                          <div>
-                            <span>Recommended Quantity</span>
-                            <strong>
-                              {suggestion.recommendedQuantity}
-                            </strong>
-                          </div>
-
-                          <div>
-                            <span>Lead Time</span>
-                            <strong>5 days</strong>
-                          </div>
-                        </>
+                        <div className="decision">
+                          {suggestion.pricing.status}
+                        </div>
                       )}
-                    </div>
 
-                    <div className="reasoning">
-                      <strong>Reasoning</strong>
-                      <p>{suggestion.reasoning}</p>
                     </div>
+                  )}
 
-                    <div className="confidence">
-                      Confidence:{" "}
-                      {Math.round(
-                        suggestion.confidence * 100
+                  {suggestion?.reorder && (
+                    <div className="suggestion">
+
+                      <div className="suggestion-header">
+                        <strong>
+                          Reorder Suggestion
+                        </strong>
+
+                        <span className="badge">
+                          {suggestion.reorder.triggerReason}
+                        </span>
+                      </div>
+
+                      <p>
+                        Recommended quantity:{" "}
+                        <strong>
+                          {suggestion.reorder.recommendedQuantity}
+                        </strong>
+                      </p>
+
+                      <p className="reason">
+                        {suggestion.reorder.reasoning}
+                      </p>
+
+                      <span className="confidence">
+                        Confidence:{" "}
+                        {Math.round(
+                          suggestion.reorder.confidence * 100
+                        )}
+                        %
+                      </span>
+
+                      {suggestion.reorder.status ===
+                      "PENDING" ? (
+                        <div className="actions">
+
+                          <button
+                            className="accept"
+                            onClick={() =>
+                              acceptReorder(
+                                product.id,
+                                suggestion.reorder
+                                  .recommendedQuantity
+                              )
+                            }
+                          >
+                            Accept
+                          </button>
+
+                          <button
+                            className="reject"
+                            onClick={() =>
+                              rejectReorder(product.id)
+                            }
+                          >
+                            Reject
+                          </button>
+
+                        </div>
+                      ) : (
+                        <div className="decision">
+                          {suggestion.reorder.status}
+                        </div>
                       )}
-                      %
-                    </div>
 
-                    <div className="actions">
-                      <button
-                        className="accept"
-                        onClick={() =>
-                          suggestion.type === "PRICING"
-                            ? acceptPricing(suggestion)
-                            : acceptReorder(suggestion)
-                        }
-                      >
-                        Accept
-                      </button>
-
-                      <button
-                        className="reject"
-                        onClick={() =>
-                          suggestion.type === "PRICING"
-                            ? rejectPricing(suggestion)
-                            : rejectReorder(suggestion)
-                        }
-                      >
-                        Reject
-                      </button>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+                  )}
+
+                </div>
+              );
+            })}
+
+          </div>
         </section>
+
       </main>
+
     </div>
   );
 }
