@@ -1,3 +1,9 @@
+require("dotenv").config();
+
+const { GoogleGenAI } = require("@google/genai");
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY
+});
 const express = require("express");
 const cors = require("cors");
 
@@ -31,6 +37,72 @@ const products = [
     status: "ACTIVE"
   }
 ];
+
+async function getAIRecommendation(product, triggerReason) {
+  const prompt = `
+You are an inventory and pricing advisor.
+
+Product: ${product.name}
+Category: ${product.category}
+Current price: ${product.currentPrice}
+Current stock: ${product.stock}
+Reorder threshold: ${product.reorderThreshold}
+Demand velocity: ${product.demandVelocity}
+Trigger: ${triggerReason}
+
+Give a practical recommendation for the merchandising team.
+
+Return ONLY valid JSON:
+{
+  "recommendedPrice": number,
+  "direction": "INCREASE" or "DECREASE" or "HOLD",
+  "confidence": number,
+  "recommendedQuantity": number,
+  "reasoning": "short explanation"
+}
+`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-3.8-flash",
+      contents: prompt
+    });
+
+    const text = response.text;
+
+    const cleaned = text
+      .replace(/```json/g, "")
+      .replace(/```/g, "")
+      .trim();
+
+    return JSON.parse(cleaned);
+    } catch (error) {
+    console.log("AI error:", error.message);
+
+    return {
+      recommendedPrice:
+        product.stock < product.reorderThreshold
+          ? Math.round(product.currentPrice * 1.10)
+          : product.currentPrice,
+
+      direction:
+        product.stock < product.reorderThreshold
+          ? "INCREASE"
+          : "HOLD",
+
+      confidence: 0.90,
+
+      recommendedQuantity:
+        Math.max(
+          1,
+          (product.reorderThreshold * 3) - product.stock
+        ),
+
+      reasoning:
+        "Rule-based fallback used because the AI service was temporarily unavailable."
+    };
+  }
+}
 
 // --------------------------------------------------
 // Commerce Advisor
@@ -164,6 +236,82 @@ function createReorderSuggestion(product) {
 app.get("/", (req, res) => {
   res.json({
     message: "StockPulse backend is running"
+  });
+});
+
+app.get("/test-ai", async (req, res) => {
+  const result = await getAIRecommendation(products[0], "INVENTORY_LOW");
+
+  res.json(result);
+});
+
+app.post("/products/:id/suggest-pricing", async (req, res) => {
+  const product = products.find(
+    p => p.id === Number(req.params.id)
+  );
+
+  if (!product) {
+    return res.status(404).json({
+      message: "Product not found"
+    });
+  }
+
+  const result = await getAIRecommendation(
+    product,
+    product.stock < product.reorderThreshold
+      ? "INVENTORY_LOW"
+      : "MANUAL"
+  );
+
+  if (!result) {
+    return res.status(500).json({
+      message: "Could not generate recommendation"
+    });
+  }
+
+  res.json({
+    productId: product.id,
+    currentPrice: product.currentPrice,
+    ...result,
+    triggerReason:
+      product.stock < product.reorderThreshold
+        ? "INVENTORY_LOW"
+        : "MANUAL",
+    status: "PENDING"
+  });
+});
+
+app.post("/products/:id/suggest-reorder", async (req, res) => {
+  const product = products.find(
+    p => p.id === Number(req.params.id)
+  );
+
+  if (!product) {
+    return res.status(404).json({
+      message: "Product not found"
+    });
+  }
+
+  const result = await getAIRecommendation(
+    product,
+    "INVENTORY_LOW"
+  );
+
+  if (!result) {
+    return res.status(500).json({
+      message: "Could not generate recommendation"
+    });
+  }
+
+  res.json({
+    productId: product.id,
+    currentStock: product.stock,
+    recommendedQuantity: result.recommendedQuantity,
+    suggestedLeadTimeDays: 5,
+    confidence: result.confidence,
+    reasoning: result.reasoning,
+    triggerReason: "INVENTORY_LOW",
+    status: "PENDING"
   });
 });
 
